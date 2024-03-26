@@ -17,7 +17,6 @@ out
 
 .idea/
 style_editing/predictions
-style_editing/svm_coefs
 style_editing/data_eg3d
 style_editing/checkpoints
 
