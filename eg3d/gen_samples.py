@@ -156,14 +156,19 @@ def generate_images(
     cam2world_pose = LookAtPoseSampler.sample(3.14/2, 3.14/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
     intrinsics = FOV_to_intrinsics(fov_deg, device=device)
 
+    svm_coef_dir = '../style_editing/svm_coefs'
+    coef = np.load(os.path.join(svm_coef_dir, 'coef.npy'))
+    coef = torch.tensor(coef, device=device)
+
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+        z += coef  # addition removes glasses, subtraction adds them
 
         imgs = []
         angle_p = -0.2
-        for angle_y, angle_p in [(-0.8, angle_p), (.4, angle_p), (0, angle_p), (-.4, angle_p), (-0.8, angle_p)]:
+        for angle_y, angle_p in [(0, angle_p)]:
             cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device=device)
             cam_radius = G.rendering_kwargs.get('avg_camera_radius', 2.7)
             cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device=device)
@@ -172,6 +177,13 @@ def generate_images(
             conditioning_params = torch.cat([conditioning_cam2world_pose.reshape(-1, 16), intrinsics.reshape(-1, 9)], 1)
 
             ws = G.mapping(z, conditioning_params, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
+            torch.save(z, os.path.join(outdir, f'seed{seed:04d}.pt'))
+            # ws_other = torch.load(os.path.join(outdir, 'seed0000.pt'))
+            # ws = torch.cat([ws_other[:, :4, :], ws[:, 4:, :]], dim=1)
+            # feature 2: background features?
+            # features 5-6: glasses ?
+            # ws = torch.cat([ws[:, :5, :], ws_other[:, 5:7, :], ws[:, 7:, :]], dim=1)
+            # assert ws.shape == ws_other.shape
             img = G.synthesis(ws, camera_params)['image']
 
             img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
@@ -179,7 +191,9 @@ def generate_images(
 
         img = torch.cat(imgs, dim=2)
 
-        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.png')
+        img = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB')
+        # img = img.resize((224, 224))
+        img.save(f'{outdir}/seed{seed:04d}.png')
 
         if shapes:
             # extract a shape.mrc with marching cubes. You can view the .mrc file using ChimeraX from UCSF.
