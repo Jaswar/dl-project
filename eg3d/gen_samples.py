@@ -163,7 +163,7 @@ def generate_images(
     cam2world_pose = LookAtPoseSampler.sample(3.14/2, 3.14/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
     intrinsics = FOV_to_intrinsics(fov_deg, device=device)
 
-    svm_coef_dir = './style_editing/svm_coefs'
+    svm_coef_dir = './kaggle/working/style_editing/svm_coefs'
     coef = np.load(os.path.join(svm_coef_dir, 'coef.npy'))
     coef = torch.tensor(coef, device=device)
 
