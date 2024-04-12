@@ -208,16 +208,21 @@ def generate_images(
         if eyes:
             d_imgs = np.array([depth_img.cpu() for depth_img in depths]).squeeze()
             d_imgs = d_imgs.squeeze()
-            print(np.shape(d_imgs))
+            one_image = False
+            if d_imgs.shape <= 2:
+                one_image = True
+                d_img = d_imgs
             for i in range(np.shape(d_imgs)[0]):
-                d_img = d_imgs[i][30:70, 20:-20]
+                if not one_image:
+                    d_img = d_imgs[i]
+                d_img = d_img[30:70, 20:-20]
                 d_img = np.clip(d_img, np.min(img), np.max(img) * 0.95)
                 plt.imshow(d_img, interpolation='none')
 
                 plt.savefig(f'{outdir}/seed{seed:04d}-depth{i}.png')
                 plt.close()
-
-
+                if one_image:
+                    break
 
         if shapes:
             # extract a shape.mrc with marching cubes. You can view the .mrc file using ChimeraX from UCSF.
