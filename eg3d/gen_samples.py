@@ -206,10 +206,12 @@ def generate_images(
         img.save(f'{outdir}/seed{seed:04d}.png')
 
         if eyes:
-            depths = np.array([depth_img.cpu() for depth_img in depths]).squeeze()
-            for i in range(np.shape(depths)[0]):
-                d_img = depths[i][30:70, 20:-20]
-                d_img = np.clip(img, np.min(img), np.max(img) * 0.95)
+            d_imgs = np.array([depth_img.cpu() for depth_img in depths]).squeeze()
+            d_imgs = d_imgs.squeeze()
+            print(np.shape(d_imgs))
+            for i in range(np.shape(d_imgs)[0]):
+                d_img = d_imgs[i][30:70, 20:-20]
+                d_img = np.clip(d_img, np.min(img), np.max(img) * 0.95)
                 plt.imshow(d_img, interpolation='none')
 
                 plt.savefig(f'{outdir}/seed{seed:04d}-depth{i}.png')
