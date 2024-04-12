@@ -16,6 +16,7 @@ from typing import List, Optional, Tuple, Union
 
 import click
 import dnnlib
+import matplotlib.pyplot as plt
 import numpy as np
 import PIL.Image
 import torch
@@ -110,6 +111,7 @@ def create_samples(N=256, voxel_origin=[0, 0, 0], cube_length=2.0):
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 @click.option('--shapes', help='Export shapes as .mrc files viewable in ChimeraX', type=bool, required=False, metavar='BOOL', default=False, show_default=True)
+@click.option('--eyes', help='Changes the output of shapes to only slice the eyes combined with relevant depth image of the generated face.', type=bool, required=False, metavar='BOOL', default=False, show_default=True)
 @click.option('--shape-res', help='', type=int, required=False, metavar='int', default=512, show_default=True)
 @click.option('--fov-deg', help='Field of View of camera in degrees', type=int, required=False, metavar='float', default=18.837, show_default=True)
 @click.option('--shape-format', help='Shape Format', type=click.Choice(['.mrc', '.ply']), default='.mrc')
@@ -121,6 +123,7 @@ def generate_images(
     truncation_cutoff: int,
     outdir: str,
     shapes: bool,
+    eyes: bool,
     shape_res: int,
     fov_deg: float,
     shape_format: str,
@@ -141,6 +144,10 @@ def generate_images(
     device = torch.device('cuda')
     with dnnlib.util.open_url(network_pkl) as f:
         G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+
+    if eyes and not shapes:
+        shapes = True
+        print('Eyes was set to true yet shapes to false. Shapes is overriden to true in this case.')
 
     # Specify reload_modules=True if you want code modifications to take effect; otherwise uses pickled code
     if reload_modules:
@@ -167,6 +174,7 @@ def generate_images(
         z += coef  # addition removes glasses, subtraction adds them
 
         imgs = []
+        depths = []
         angle_p = -0.2
         for angle_y, angle_p in [(0, angle_p)]:
             cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device=device)
@@ -184,22 +192,40 @@ def generate_images(
             # features 5-6: glasses ?
             # ws = torch.cat([ws[:, :5, :], ws_other[:, 5:7, :], ws[:, 7:, :]], dim=1)
             # assert ws.shape == ws_other.shape
-            img = G.synthesis(ws, camera_params)['image']
+            data = G.synthesis(ws, camera_params)
+            depth_img = data['image_depth']
+            img = data['image']
 
             img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
             imgs.append(img)
+            depths.append(depth_img)
 
         img = torch.cat(imgs, dim=2)
-
         img = PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB')
         # img = img.resize((224, 224))
         img.save(f'{outdir}/seed{seed:04d}.png')
+
+        if eyes:
+            depths = np.array([depth_img.cpu() for depth_img in depths]).squeeze()
+            for i in range(np.shape(depths)[0]):
+                d_img = depths[i][30:70, 20:-20]
+                d_img = np.clip(img, np.min(img), np.max(img) * 0.95)
+                plt.imshow(d_img, interpolation='none')
+
+                plt.savefig(f'{outdir}/seed{seed:04d}-depth{i}.png')
+                plt.close()
+
+
 
         if shapes:
             # extract a shape.mrc with marching cubes. You can view the .mrc file using ChimeraX from UCSF.
             max_batch=1000000
 
-            samples, voxel_origin, voxel_size = create_samples(N=shape_res, voxel_origin=[0, 0, 0], cube_length=G.rendering_kwargs['box_warp'] * 1)#.reshape(1, -1, 3)
+            if eyes:
+                samples, voxel_origin, voxel_size = create_samples(N=shape_res, voxel_origin=[0.25, 0.1, 0], cube_length=G.rendering_kwargs['box_warp'] * 1 / 2)#.reshape(1, -1, 3)
+            else:
+                samples, voxel_origin, voxel_size = create_samples(N=shape_res, voxel_origin=[0, 0, 0], cube_length=G.rendering_kwargs['box_warp'] * 1)#.reshape(1, -1, 3)
+
             samples = samples.to(z.device)
             sigmas = torch.zeros((samples.shape[0], samples.shape[1], 1), device=z.device)
             transformed_ray_directions_expanded = torch.zeros((samples.shape[0], max_batch, 3), device=z.device)
@@ -218,15 +244,24 @@ def generate_images(
             sigmas = sigmas.reshape((shape_res, shape_res, shape_res)).cpu().numpy()
             sigmas = np.flip(sigmas, 0)
 
-            # Trim the border of the extracted cube
-            pad = int(30 * shape_res / 256)
+            if eyes:
+                # Smaller slicing values to only slice the head.
+                low_pad = int(10 * shape_res / 256)
+                chin_pad = int(65 * shape_res / 256)
+                head_pad = int(90 * shape_res / 256)
+            else:
+                # Trim the border of the extracted cube
+                pad = int(30 * shape_res / 256)
+                low_pad, chin_pad, head_pad = pad
+
             pad_value = -1000
-            sigmas[:pad] = pad_value
-            sigmas[-pad:] = pad_value
-            sigmas[:, :pad] = pad_value
-            sigmas[:, -pad:] = pad_value
-            sigmas[:, :, :pad] = pad_value
-            sigmas[:, :, -pad:] = pad_value
+            sigmas[:low_pad] = pad_value
+            sigmas[-low_pad:] = pad_value
+            sigmas[:, :chin_pad] = pad_value
+            sigmas[:, -head_pad:] = pad_value
+            sigmas[:, :, :low_pad] = pad_value
+            sigmas[:, :, -low_pad:] = pad_value
+
 
             if shape_format == '.ply':
                 from shape_utils import convert_sdf_samples_to_ply
