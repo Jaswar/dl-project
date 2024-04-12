@@ -209,7 +209,7 @@ def generate_images(
             d_imgs = np.array([depth_img.cpu() for depth_img in depths]).squeeze()
             d_imgs = d_imgs.squeeze()
             one_image = False
-            if d_imgs.shape <= 2:
+            if len(d_imgs.shape) <= 2:
                 one_image = True
                 d_img = d_imgs
             for i in range(np.shape(d_imgs)[0]):
