@@ -112,6 +112,8 @@ def create_samples(N=256, voxel_origin=[0, 0, 0], cube_length=2.0):
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 @click.option('--shapes', help='Export shapes as .mrc files viewable in ChimeraX', type=bool, required=False, metavar='BOOL', default=False, show_default=True)
 @click.option('--eyes', help='Changes the output of shapes to only slice the eyes combined with relevant depth image of the generated face.', type=bool, required=False, metavar='BOOL', default=False, show_default=True)
+@click.option('--z-path', help='The path to the normal vector for feature editing.', type=str, required=False, default=None, show_default=True)
+@click.option('--alpha', help='The coefficient for feature editing.', type=float, required=False, default=0.0, show_default=True)
 @click.option('--shape-res', help='', type=int, required=False, metavar='int', default=512, show_default=True)
 @click.option('--fov-deg', help='Field of View of camera in degrees', type=int, required=False, metavar='float', default=18.837, show_default=True)
 @click.option('--shape-format', help='Shape Format', type=click.Choice(['.mrc', '.ply']), default='.mrc')
@@ -124,6 +126,8 @@ def generate_images(
     outdir: str,
     shapes: bool,
     eyes: bool,
+    z_path: str,
+    alpha: float,
     shape_res: int,
     fov_deg: float,
     shape_format: str,
@@ -163,20 +167,28 @@ def generate_images(
     cam2world_pose = LookAtPoseSampler.sample(3.14/2, 3.14/2, torch.tensor([0, 0, 0.2], device=device), radius=2.7, device=device)
     intrinsics = FOV_to_intrinsics(fov_deg, device=device)
 
-    svm_coef_dir = '../style_editing/svm_coefs'
-    coef = np.load(os.path.join(svm_coef_dir, 'coef.npy'))
-    coef = torch.tensor(coef, device=device)
+    if z_path is not None:
+        if z_path.endswith('.npy'):
+            coef = np.load(z_path)
+        elif z_path.endswith('.pt'):
+            coef = torch.load(z_path)
+        else:
+            raise ValueError('z_path must be a .npy or .pt file.')
+        coef = torch.tensor(coef, device=device)
 
     # Generate images.
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        z += coef  # addition removes glasses, subtraction adds them
+        if z_path is not None:
+            z += alpha * coef  # addition removes glasses, subtraction adds them
 
         imgs = []
         depths = []
         angle_p = -0.2
-        for angle_y, angle_p in [(1.2, angle_p), (0.8, angle_p), (.4, angle_p), (0, angle_p), (-.4, angle_p), (-0.8, angle_p), (-1.2, angle_p)]: # add more aggressive angles to recreate black backgrounds.
+        angles = [(1.2, angle_p), (0.8, angle_p), (.4, angle_p), (0, angle_p), (-.4, angle_p), (-0.8, angle_p), (-1.2, angle_p)] # add more aggressive angles to recreate black backgrounds.
+        angles = angles if z_path is None and not eyes else [(0, angle_p)]
+        for angle_y, angle_p in angles:
             cam_pivot = torch.tensor(G.rendering_kwargs.get('avg_camera_pivot', [0, 0, 0]), device=device)
             cam_radius = G.rendering_kwargs.get('avg_camera_radius', 2.7)
             cam2world_pose = LookAtPoseSampler.sample(np.pi/2 + angle_y, np.pi/2 + angle_p, cam_pivot, radius=cam_radius, device=device)
@@ -186,12 +198,7 @@ def generate_images(
 
             ws = G.mapping(z, conditioning_params, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
             torch.save(z, os.path.join(outdir, f'seed{seed:04d}.pt'))
-            # ws_other = torch.load(os.path.join(outdir, 'seed0000.pt'))
-            # ws = torch.cat([ws_other[:, :4, :], ws[:, 4:, :]], dim=1)
-            # feature 2: background features?
-            # features 5-6: glasses ?
-            # ws = torch.cat([ws[:, :5, :], ws_other[:, 5:7, :], ws[:, 7:, :]], dim=1)
-            # assert ws.shape == ws_other.shape
+
             data = G.synthesis(ws, camera_params)
             depth_img = data['image_depth']
             img = data['image']
@@ -206,7 +213,7 @@ def generate_images(
         img.save(f'{outdir}/seed{seed:04d}.png')
 
         if eyes:
-            d_imgs = np.array([depth_img.cpu() for depth_img in depths]).squeeze()
+            d_imgs = np.array([depth_img.cpu().numpy() for depth_img in depths]).squeeze()
             d_imgs = d_imgs.squeeze()
             one_image = False
             if len(d_imgs.shape) <= 2:
