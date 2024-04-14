@@ -8,6 +8,10 @@ This repository contains our implementation for the reproducibility of the paper
 
 **Original paper:** https://nvlabs.github.io/eg3d/
 
+## Installation
+
+Please check the [original repository](https://github.com/NVlabs/eg3d) for the installation instructions.
+
 ## Running the code 
 
 ### Feature 1: Style editing
